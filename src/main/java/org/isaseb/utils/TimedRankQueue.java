@@ -100,6 +100,10 @@ public class TimedRankQueue<E> extends AbstractQueue<E> {
 		return sortHashtable(freqHashmap);
 	}
 	
+	public int	getRank (E e) {
+		return freqHashmap.get(e).intValue();
+	}
+	
 	public int keyCount() {
 		return freqHashmap.size();
 	}
