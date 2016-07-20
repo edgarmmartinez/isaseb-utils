@@ -15,26 +15,45 @@ import java.util.List;
 import java.util.Map;
 import java.util.AbstractMap.SimpleEntry;
 
+import org.isaseb.utils.HashKey;
+
 /**
- * @author edgar
+ * @author Edgar Martinez
  *
  */
-public class TimedRankQueue<E> extends AbstractQueue<E> {
-	LinkedList<Map.Entry<E, Long>>	queueList;
-	LinkedHashMap<E,Integer>	freqHashmap;
-	int							ttlSeconds;
-	long						oldestAllowed;
+public class TimedRankQueue<Key,Elem> extends AbstractQueue<Elem> {
 
-	public TimedRankQueue (int ttlSeconds) {
-		freqHashmap = new LinkedHashMap<E,Integer>();
-		queueList = new LinkedList<Map.Entry<E, Long>>();
+	class RankElem {
+		Elem	element;
+		Integer	rank;
+		
+		public RankElem (Elem element, Integer rank) {
+			this.element = element;
+			this.rank = rank;
+		}
+	}
+	
+	//List of "Elem" objects, and a Long for the expiration time in seconds
+	LinkedList<Map.Entry<Elem,Long>>	queueList;
+	
+	// Hashmap of key (String) and frequency
+	LinkedHashMap<String,RankElem>	freqHashmap;
+	HashKey<Key,Elem>	hashKey = null;
+	
+	int		ttlSeconds;
+	long	oldestAllowed;
+
+	public TimedRankQueue (HashKey<Key,Elem> key, int ttlSeconds) {
+		queueList = new LinkedList<Map.Entry<Elem,Long>>();
+		freqHashmap = new LinkedHashMap<String,RankElem>();
+		this.hashKey = key;
 		this.ttlSeconds = ttlSeconds;
 	}
 	
 	@Override
-	public boolean offer(E e) {
-		queueList.add(new SimpleEntry<E, Long>(e,System.currentTimeMillis()/1000));
-		incrFreq(e);
+	public boolean offer(Elem element) {
+		queueList.add(new SimpleEntry<Elem,Long>(element,System.currentTimeMillis()/1000));
+		incrFreq(element);
 		
 		purgeOld();
 
@@ -51,29 +70,27 @@ public class TimedRankQueue<E> extends AbstractQueue<E> {
 	}
 	
 	@Override
-	public E poll() {
+	public Elem poll() {
 		purgeOld();
 		
-		Map.Entry<E,Long> item = queueList.poll();
+		Map.Entry<Elem,Long> item = queueList.poll();
 		
 		if (item != null) {
 			decrFreq(item.getKey());
+			return item.getKey();
 		}
-		
-		return item.getKey();
+		return null;
 	}
 
 	@Override
-	public E peek() {
+	public Elem peek() {
 		purgeOld();
-		return queueList.peek().getKey();
+		return queueList.peek() != null ? queueList.peek().getKey() : null;
 	}
 
 	@Override
-	public Iterator<E> iterator() {
-		//TODO why can't I init the LinkedList with an initial capacity
-		
-		LinkedList<E>	list = new LinkedList<E>();
+	public Iterator<Elem> iterator() {
+		LinkedList<Elem>	list = new LinkedList<Elem>();
 		
 		purgeOld();
 		
@@ -92,60 +109,70 @@ public class TimedRankQueue<E> extends AbstractQueue<E> {
 
 	@Override
 	public void clear() {
-		freqHashmap.clear();
 		queueList.clear();
+		freqHashmap.clear();
 	};
 
-	public List<Map.Entry<E, Integer>> getRank () {
+	public List<Map.Entry<Elem, Integer>> getRank () {
 		return sortHashtable(freqHashmap);
 	}
 	
-	public int	getRank (E e) {
-		return freqHashmap.get(e).intValue();
+	public int	getRank (Elem e) {
+		return freqHashmap.get(getRankKey(e)).rank.intValue();
 	}
 	
 	public int keyCount() {
 		return freqHashmap.size();
 	}
 	
-	private int incrFreq (E element) {
-		Integer	value = freqHashmap.get(element);
-		
-		if (value == null) {
-			value = new Integer (1);
-		} else {
-			value = value.intValue() + 1;
-		}
-
-		freqHashmap.put(element, value);
-		
-		return value.intValue();
+	private String getRankKey(Elem element) {
+		return hashKey.getKey(element);
 	}
 	
-	private int decrFreq (E	element) {
-		Integer	value = freqHashmap.get(element);
+	private int incrFreq (Elem element) {
+		String elemKey = getRankKey(element);
+		RankElem rankElem = freqHashmap.get(elemKey);
 		
-		if (value != null) {
-			value = value.intValue() - 1;
-			if (value > 0) {
-				freqHashmap.put(element, value);
+		if (rankElem == null) {
+			rankElem = new RankElem(element, new Integer (1));
+		} else {
+			rankElem.rank = rankElem.rank.intValue() + 1;
+		}
+
+		freqHashmap.put(elemKey, rankElem);
+		
+		return rankElem.rank.intValue();
+	}
+	
+	private int decrFreq (Elem	element) {
+		String elemKey = getRankKey(element);
+		RankElem rankElem = freqHashmap.get(elemKey); 
+		
+		if (rankElem != null) {
+			rankElem.rank = rankElem.rank.intValue() - 1;
+			if (rankElem.rank > 0) {
+				freqHashmap.put(elemKey, rankElem);
 			} else {
-				freqHashmap.remove(element);
+				freqHashmap.remove(elemKey);
 			}
-			return value.intValue();
+			return rankElem.rank.intValue();
 		}
 		
 		return 0;
 	}
-	
-    private List<Map.Entry<E, Integer>> sortHashtable (HashMap<E,Integer> table) {
-        List<Map.Entry<E, Integer>> entries = new ArrayList<Map.Entry<E, Integer>>(table.entrySet());
-                Collections.sort(entries, new Comparator<Map.Entry<E, Integer>>() {
-                  public int compare(Map.Entry<E, Integer> a, Map.Entry<E, Integer> b){
-                	  //	sort high to low
-                	  return b.getValue().compareTo(a.getValue());
-                  }
-                });
+
+	private List<Map.Entry<Elem, Integer>> sortHashtable (HashMap<String,RankElem> table) {
+        List<Map.Entry<Elem, Integer>> entries = new ArrayList<Map.Entry<Elem,Integer>>(table.size());
+        for ( RankElem rankElem : table.values()) {
+        	entries.add(new SimpleEntry<Elem,Integer>(rankElem.element, rankElem.rank));
+        }
+        Collections.sort(entries, new Comparator<Map.Entry<Elem, Integer>>() {
+                  					public int compare(Map.Entry<Elem, Integer> a, Map.Entry<Elem, Integer> b){
+                  						//	sort high to low
+                  						return b.getValue().compareTo(a.getValue());
+                  					}
+                				  }
+        				);
         
         return entries;
     }
